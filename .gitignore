@@ -1,0 +1,7 @@
+checkpoints_*/
+figures/
+__pycache__/
+relatedwork/
+*_relwork.py
+other_files/
+run_models.py
