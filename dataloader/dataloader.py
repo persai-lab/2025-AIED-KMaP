@@ -291,9 +291,11 @@ class KTBM_DataLoader_personalized_stateful:
         sampler = CustomBatchSampler(train_idx_data, batch_size=self.batch_size)
         self.train_loader = DataLoader(train_dataset, sampler=sampler, collate_fn=lambda batch: tuple(map(torch.tensor, batch[0])))
 
-        test_dataset = MyDataset(test_data_q, test_data_a, test_data_l, test_data_d, test_data_s, test_target_answers, test_target_masks, test_target_masks_l, train_split=False)
+        self.test_dataset = MyDataset(test_data_q, test_data_a, test_data_l, test_data_d, test_data_s, test_target_answers, test_target_masks, test_target_masks_l, train_split=False)
         sampler = CustomBatchSampler(test_idx_data, batch_size=self.batch_size)
-        self.test_loader = DataLoader(test_dataset, sampler=sampler, collate_fn=lambda batch: tuple(map(torch.tensor, batch[0])))
+        self.test_loader = DataLoader(self.test_dataset, sampler=sampler, collate_fn=lambda batch: tuple(map(torch.tensor, batch[0])))
+
+        self.test_idx_data = test_idx_data
 
     def ML_BH_ExtDataset(self, q_records, a_records, l_records, d_records,
                                            max_seq_len,
@@ -378,7 +380,8 @@ class KTBM_DataLoader_personalized_stateful:
 
     def get_test_splits(self, num_splits):
         skf = KFold(n_splits=num_splits, shuffle=True, random_state=self.random_state)
-        for _, test_index in skf.split(self.test_data, np.zeros(self.test_data_q.shape[0])):
-            test_split = self.test_data[test_index]
-            test_split = TensorDataset(*test_split)
-            yield DataLoader(test_split, batch_size=self.batch_size)
+        for _, test_index in skf.split(self.test_idx_data, np.zeros(len(self.test_idx_data))):
+            test_idx_data = [self.test_idx_data[idx] for idx in test_index]
+            sampler = CustomBatchSampler(test_idx_data, batch_size=self.batch_size)
+            test_loader = DataLoader(self.test_dataset, sampler=sampler, collate_fn=lambda batch: tuple(map(torch.tensor, batch[0])))
+            yield test_loader

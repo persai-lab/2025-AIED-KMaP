@@ -42,7 +42,7 @@ ednet_config = {
     "num_eval_negative_sampling": 99,
     "num_train_negative_sampling": 5,
     "num_clusters": 3,
-    "student_learning_rate": 0.1,
+    "student_learning_rate": 0.01,
 
     "embedding_size_q": 64,
     "embedding_size_a": 32,
@@ -98,7 +98,7 @@ junyi_config = {
     "num_eval_negative_sampling": 99,
     "num_train_negative_sampling": 5,
     "num_clusters": 3,
-    "student_learning_rate": 0.1,
+    "student_learning_rate": 0.01,
 
     "embedding_size_q": 64,
     "embedding_size_a": 32,

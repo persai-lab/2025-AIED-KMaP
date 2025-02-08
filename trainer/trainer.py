@@ -49,36 +49,7 @@ class trainer_mat_pers:
         self.bce_criterion = nn.BCEWithLogitsLoss(reduction='mean')
         self.ce_criterion = nn.CrossEntropyLoss(reduction='mean')
         
-        if config.optimizer == "sgd":
-            self.optimizer = torch.optim.SGD(self.model.parameters(), 
-                                             lr=self.config.learning_rate,
-                                             momentum=self.config.momentum,
-                                             weight_decay=self.config.weight_decay)
-        elif config.optimizer == "adam":
-            self.optimizer = torch.optim.Adam(self.model.parameters(), 
-                                              lr=self.config.learning_rate,
-                                              betas=(config.beta1, config.beta2),
-                                              eps=self.config.epsilon,
-                                              weight_decay=self.config.weight_decay)
-
-        self.student_optimizer = torch.optim.Adam(self.model.s_embed_matrix.parameters(), lr=self.config.student_learning_rate)
-
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer,
-            mode='min',
-            patience=3,
-            min_lr=1e-5,
-            factor=0.5,
-            verbose=True
-        )
-        self.student_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            self.student_optimizer,
-            mode='min',
-            patience=3,
-            min_lr=0.01,
-            factor=0.7,
-            verbose=True
-        )
+        self.init_optimizer()
 
         self.is_cuda = torch.cuda.is_available()
         if self.is_cuda and not self.config.cuda:
@@ -109,6 +80,38 @@ class trainer_mat_pers:
         self.model.initialize()
 
         self.kmeans = SoftKmeans(self.config.num_clusters)
+
+    def init_optimizer(self):
+        if self.config.optimizer == "sgd":
+            self.optimizer = torch.optim.SGD(self.model.parameters(), 
+                                             lr=self.config.learning_rate,
+                                             momentum=self.config.momentum,
+                                             weight_decay=self.config.weight_decay)
+        elif self.config.optimizer == "adam":
+            self.optimizer = torch.optim.Adam(self.model.parameters(), 
+                                              lr=self.config.learning_rate,
+                                              betas=(self.config.beta1, self.config.beta2),
+                                              eps=self.config.epsilon,
+                                              weight_decay=self.config.weight_decay)
+
+        self.student_optimizer = torch.optim.Adam(self.model.s_embed_matrix.parameters(), lr=self.config.student_learning_rate)
+
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer,
+            mode='min',
+            patience=3,
+            min_lr=1e-5,
+            factor=0.5,
+            verbose=True
+        )
+        self.student_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            self.student_optimizer,
+            mode='min',
+            patience=3,
+            min_lr=0.01,
+            factor=0.7,
+            verbose=True
+        )
 
     def train(self):
         for epoch in range(1, self.config.max_epoch + 1):
@@ -154,24 +157,26 @@ class trainer_mat_pers:
         next_pos_embed_ = next_pos_embed_q.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_q]
         next_neg_embeds_ = [next_neg_embeds_q[idx].permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_q] for idx in range(num_neg_sampling)]
         triplet_loss_q = self.ntxent_loss(pred_embed_, next_pos_embed_, next_neg_embeds_)
+        prior_loss_q = (pred_embed_.norm(dim=-1) ** 2).mean() + (next_pos_embed_.norm(dim=-1) ** 2).mean() + sum([(next_neg_embeds_[idx].norm(dim=-1) ** 2).mean() for idx in range(num_neg_sampling)])
 
         pred_embed_ = pred_embed_l.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_l]
         next_pos_embed_ = next_pos_embed_l.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_l]
         next_neg_embeds_ = [next_neg_embeds_l[idx].permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_l] for idx in range(num_neg_sampling)]
         triplet_loss_l = self.ntxent_loss(pred_embed_, next_pos_embed_, next_neg_embeds_)
+        prior_loss_l = (pred_embed_.norm(dim=-1) ** 2).mean() + (next_pos_embed_.norm(dim=-1) ** 2).mean() + sum([(next_neg_embeds_[idx].norm(dim=-1) ** 2).mean() for idx in range(num_neg_sampling)])
 
         # calculate reconstruction loss
         pred_dec_q = pred_dec_q.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_q]
         next_dec_q = next_dec_q.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_q]
         pred_dec_gt_q = pred_dec_gt_q.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_q]
         next_dec_gt_q = next_dec_gt_q.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_q]
-        reconstruction_loss_q = self.mse_criterion(torch.concat([pred_dec_q, next_dec_q]), torch.concat([next_dec_gt_q, pred_dec_gt_q]))
+        reconstruction_loss_q = self.mse_criterion(torch.concat([pred_dec_q, next_dec_q]), torch.concat([next_dec_gt_q, pred_dec_gt_q])) + 0.0001*prior_loss_q
 
         pred_dec_l = pred_dec_l.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_l]
         next_dec_l = next_dec_l.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_l]
         pred_dec_gt_l = pred_dec_gt_l.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_l]
         next_dec_gt_l = next_dec_gt_l.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_l]
-        reconstruction_loss_l = self.mse_criterion(torch.concat([pred_dec_l, next_dec_l]), torch.concat([next_dec_gt_l, pred_dec_gt_l]))
+        reconstruction_loss_l = self.mse_criterion(torch.concat([pred_dec_l, next_dec_l]), torch.concat([next_dec_gt_l, pred_dec_gt_l])) + 0.0001*prior_loss_l
 
         if evaluation:
             features = torch.concat([next_pos_embed_q.unsqueeze(0), next_neg_embeds_q], 0)
@@ -528,14 +533,122 @@ class trainer_mat_pers:
         if self.current_epoch % self.config.save_checkpoint_every == 0:
             torch.save(self.model.cpu().state_dict(), os.path.join(f"checkpoints_{self.config.data_name}_proposed_mat_pers", "checkpoint-{:04}.pt".format(self.current_epoch)))
 
+    def validate_for_hypo_test(self, test_loader):
+        self.model.initialize_states()
+        self.model.eval()
+        with torch.no_grad():
+            self.test_output_all = []
+            self.test_output_type_all = []
+            self.test_contrastive_all = []
+            self.test_label_all = []
+            self.test_label_type_all = []
+            self.test_label_contrastive_all = []
+            self.test_q_hitratios = []
+            self.test_q_ndcgs = []
+            self.test_q_mrrs = []
+            self.test_l_hitratios = []
+            self.test_l_ndcgs = []
+            self.test_l_mrrs = []
+
+            for data in tqdm.tqdm(test_loader):
+                q_list, a_list, l_list, d_list, s_list, target_answers_list, target_masks_list, target_masks_l_list = data
+                q_list = q_list.to(self.device)
+                a_list = a_list.to(self.device)
+                l_list = l_list.to(self.device)
+                d_list = d_list.to(self.device)
+                s_list = s_list.to(self.device)
+                target_answers_list = target_answers_list.to(self.device)
+                target_masks_list = target_masks_list.to(self.device)
+                target_masks_l_list = target_masks_l_list.to(self.device)
+
+                output, output_type, \
+                    contrastive_pos_q, contrastive_neg_q, \
+                    batch_next_repr_neg_q, batch_pred_repr_q, batch_next_repr_q, \
+                    batch_pred_repr_dec_q, batch_next_repr_dec_q, \
+                    batch_pred_repr_dec_gt_q, batch_next_repr_dec_gt_q, \
+                    contrastive_pos_l, contrastive_neg_l, \
+                    batch_next_repr_neg_l, batch_pred_repr_l, batch_next_repr_l, \
+                    batch_pred_repr_dec_l, batch_next_repr_dec_l, \
+                    batch_pred_repr_dec_gt_l, batch_next_repr_dec_gt_l = self.model(q_list, a_list, l_list, d_list, s_list, evaluation=True)
+
+                label = torch.masked_select(target_answers_list[:, 2:], target_masks_list[:, 2:])
+                label_type = torch.masked_select(d_list[:, 2:], (target_masks_list + target_masks_l_list)[:, 2:])
+
+                output = torch.masked_select(output, target_masks_list[:, 2:])
+                output_type = torch.masked_select(output_type, (target_masks_list + target_masks_l_list)[:, 2:])
+                metrics_q = self.calculate_metrics(target_masks_list[:, 2:], target_masks_l_list[:, 2:], \
+                                               batch_next_repr_q, batch_next_repr_neg_q, batch_pred_repr_q, contrastive_pos_q, contrastive_neg_q, batch_pred_repr_dec_q, batch_next_repr_dec_q, batch_pred_repr_dec_gt_q, batch_next_repr_dec_gt_q, \
+                                                batch_next_repr_l, batch_next_repr_neg_l, batch_pred_repr_l, contrastive_pos_l, contrastive_neg_l, batch_pred_repr_dec_l, batch_next_repr_dec_l, batch_pred_repr_dec_gt_l, batch_next_repr_dec_gt_l, \
+                                                self.config.num_eval_negative_sampling, evaluation=True)
+
+                self.test_output_all.extend(output.tolist())
+                self.test_output_type_all.extend(output_type.tolist())
+                self.test_label_all.extend(label.tolist())
+                self.test_label_type_all.extend(label_type.tolist())
+
+                self.test_q_hitratios.append(metrics_q["hitratio_q"])
+                self.test_q_ndcgs.append(metrics_q["ndcg_q"])
+                self.test_q_mrrs.append(metrics_q["mrr_q"])
+
+                self.test_l_hitratios.append(metrics_q["hitratio_l"])
+                self.test_l_ndcgs.append(metrics_q["ndcg_l"])
+                self.test_l_mrrs.append(metrics_q["mrr_l"])
+
+            self.test_output_all = np.array(self.test_output_all).squeeze()
+            self.test_label_all = np.array(self.test_label_all).squeeze()
+            self.test_output_type_all = np.array(self.test_output_type_all).squeeze()
+            self.test_label_type_all = np.array(self.test_label_type_all).squeeze()
+
+            if self.metric == "rmse":
+                test_evals = np.stack(
+                    [np.sqrt(metrics.mean_squared_error(self.test_label_all, self.test_output_all)),
+                     metrics.roc_auc_score(self.test_label_type_all, self.test_output_type_all),
+                     ])
+            elif self.metric == "auc":
+                test_evals = np.stack(
+                    [metrics.roc_auc_score(self.test_label_all, self.test_output_all),
+                     metrics.roc_auc_score(self.test_label_type_all, self.test_output_type_all),
+                     sum(self.test_q_hitratios) / len(self.test_q_hitratios),
+                     sum(self.test_q_ndcgs) / len(self.test_q_ndcgs),
+                     sum(self.test_q_mrrs) / len(self.test_q_mrrs),
+                     sum(self.test_l_hitratios) / len(self.test_l_hitratios),
+                     sum(self.test_l_ndcgs) / len(self.test_l_ndcgs),
+                     sum(self.test_l_mrrs) / len(self.test_l_mrrs),
+                     ])
+
+        return test_evals
+
 
 class trainer_mat_nopers(trainer_mat_pers):
 
     def init_model(self, data):
-        self.data_loader = KTBM_DataLoader_personalized(self.config, data, random_state=self.config.seed)
+        # self.data_loader = KTBM_DataLoader_personalized(self.config, data, random_state=self.config.seed)
+        self.data_loader = KTBM_DataLoader_personalized_stateful(self.config, data, random_state=self.config.seed)
         self.config.num_students = self.data_loader.num_students
         self.model = KTBM_mat_nopers(self.config)
         self.model.initialize()
+
+    def init_optimizer(self):
+        if self.config.optimizer == "sgd":
+            self.optimizer = torch.optim.SGD(self.model.parameters(), 
+                                             lr=self.config.learning_rate,
+                                             momentum=self.config.momentum,
+                                             weight_decay=self.config.weight_decay)
+        elif self.config.optimizer == "adam":
+            self.optimizer = torch.optim.Adam(self.model.parameters(), 
+                                              lr=self.config.learning_rate,
+                                              betas=(self.config.beta1, self.config.beta2),
+                                              eps=self.config.epsilon,
+                                              weight_decay=self.config.weight_decay)
+
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer,
+            mode='min',
+            patience=3,
+            min_lr=1e-5,
+            factor=0.5,
+            verbose=True
+        )
 
     def train_one_epoch(self):
         self.model.train()
@@ -824,12 +937,9 @@ class trainer_mat_nopers(trainer_mat_pers):
             self.test_q_hitratios = []
             self.test_q_ndcgs = []
             self.test_q_mrrs = []
-            # self.test_q_hitratios_c = []
-            # self.test_l_hitratios_c = []
-            # self.test_q_ndcgs_c = []
-            # self.test_l_ndcgs_c = []
-            # self.test_q_mrrs_c = []
-            # self.test_l_mrrs_c = []
+            self.test_l_hitratios = []
+            self.test_l_ndcgs = []
+            self.test_l_mrrs = []
 
             for data in tqdm.tqdm(test_loader):
                 q_list, a_list, l_list, d_list, s_list, target_answers_list, target_masks_list, target_masks_l_list = data
@@ -843,29 +953,37 @@ class trainer_mat_nopers(trainer_mat_pers):
                 target_masks_l_list = target_masks_l_list.to(self.device)
 
                 output, output_type, \
-                    contrastive_q_pos, contrastive_q_neg, batch_next_repr_neg_q, \
-                    batch_pred_repr_q, batch_next_repr_q = self.model(q_list, a_list, l_list, d_list, s_list, evaluation=True)
+                    contrastive_pos_q, contrastive_neg_q, \
+                    batch_next_repr_neg_q, batch_pred_repr_q, batch_next_repr_q, \
+                    batch_pred_repr_dec_q, batch_next_repr_dec_q, \
+                    batch_pred_repr_dec_gt_q, batch_next_repr_dec_gt_q, \
+                    contrastive_pos_l, contrastive_neg_l, \
+                    batch_next_repr_neg_l, batch_pred_repr_l, batch_next_repr_l, \
+                    batch_pred_repr_dec_l, batch_next_repr_dec_l, \
+                    batch_pred_repr_dec_gt_l, batch_next_repr_dec_gt_l = self.model(q_list, a_list, l_list, d_list, s_list, evaluation=True)
 
                 label = torch.masked_select(target_answers_list[:, 2:], target_masks_list[:, 2:])
                 label_type = torch.masked_select(d_list[:, 2:], (target_masks_list + target_masks_l_list)[:, 2:])
 
                 output = torch.masked_select(output, target_masks_list[:, 2:])
-
                 output_type = torch.masked_select(output_type, (target_masks_list + target_masks_l_list)[:, 2:])
-
-                # q_consecutives_mask = self.find_consecutive_indices(q_list)
-                # l_consecutives_mask = self.find_consecutive_indices(l_list)
-
-                metrics_q = self.calculate_metrics(target_masks_list if self.problems_model else target_masks_l_list, None, batch_next_repr_q, batch_next_repr_neg_q, batch_pred_repr_q, contrastive_q_pos, contrastive_q_neg, self.config.num_eval_negative_sampling+1, evaluation=True)
+                metrics_q = self.calculate_metrics(target_masks_list[:, 2:], target_masks_l_list[:, 2:], \
+                                               batch_next_repr_q, batch_next_repr_neg_q, batch_pred_repr_q, contrastive_pos_q, contrastive_neg_q, batch_pred_repr_dec_q, batch_next_repr_dec_q, batch_pred_repr_dec_gt_q, batch_next_repr_dec_gt_q, \
+                                                batch_next_repr_l, batch_next_repr_neg_l, batch_pred_repr_l, contrastive_pos_l, contrastive_neg_l, batch_pred_repr_dec_l, batch_next_repr_dec_l, batch_pred_repr_dec_gt_l, batch_next_repr_dec_gt_l, \
+                                                self.config.num_eval_negative_sampling, evaluation=True)
 
                 self.test_output_all.extend(output.tolist())
                 self.test_output_type_all.extend(output_type.tolist())
                 self.test_label_all.extend(label.tolist())
                 self.test_label_type_all.extend(label_type.tolist())
 
-                self.test_q_hitratios.append(metrics_q["hitratio"])
-                self.test_q_ndcgs.append(metrics_q["ndcg"])
-                self.test_q_mrrs.append(metrics_q["mrr"])
+                self.test_q_hitratios.append(metrics_q["hitratio_q"])
+                self.test_q_ndcgs.append(metrics_q["ndcg_q"])
+                self.test_q_mrrs.append(metrics_q["mrr_q"])
+
+                self.test_l_hitratios.append(metrics_q["hitratio_l"])
+                self.test_l_ndcgs.append(metrics_q["ndcg_l"])
+                self.test_l_mrrs.append(metrics_q["mrr_l"])
 
             self.test_output_all = np.array(self.test_output_all).squeeze()
             self.test_label_all = np.array(self.test_label_all).squeeze()
@@ -884,6 +1002,9 @@ class trainer_mat_nopers(trainer_mat_pers):
                      sum(self.test_q_hitratios) / len(self.test_q_hitratios),
                      sum(self.test_q_ndcgs) / len(self.test_q_ndcgs),
                      sum(self.test_q_mrrs) / len(self.test_q_mrrs),
+                     sum(self.test_l_hitratios) / len(self.test_l_hitratios),
+                     sum(self.test_l_ndcgs) / len(self.test_l_ndcgs),
+                     sum(self.test_l_mrrs) / len(self.test_l_mrrs),
                      ])
 
         return test_evals
@@ -1076,3 +1197,56 @@ class trainer_pers_nomat(trainer_mat_pers):
 
         if self.current_epoch % self.config.save_checkpoint_every == 0:
             torch.save(self.model.cpu().state_dict(), os.path.join(f"checkpoints_{self.config.data_name}_proposed_pers_nomat", "checkpoint-{:04}.pt".format(self.current_epoch)))
+
+    def validate_for_hypo_test(self, test_loader):
+        self.model.initialize_states()
+        self.model.eval()
+        with torch.no_grad():
+            self.test_output_all = []
+            self.test_output_type_all = []
+            self.test_contrastive_all = []
+            self.test_label_all = []
+            self.test_label_type_all = []
+            self.test_label_contrastive_all = []
+
+            for data in tqdm.tqdm(test_loader):
+                q_list, a_list, l_list, d_list, s_list, target_answers_list, target_masks_list, target_masks_l_list = data
+                q_list = q_list.to(self.device)
+                a_list = a_list.to(self.device)
+                l_list = l_list.to(self.device)
+                d_list = d_list.to(self.device)
+                s_list = s_list.to(self.device)
+                target_answers_list = target_answers_list.to(self.device)
+                target_masks_list = target_masks_list.to(self.device)
+                target_masks_l_list = target_masks_l_list.to(self.device)
+
+                output, output_type = self.model(q_list, a_list, l_list, d_list, s_list, evaluation=True)
+
+                label = torch.masked_select(target_answers_list[:, 2:], target_masks_list[:, 2:])
+                label_type = torch.masked_select(d_list[:, 2:], (target_masks_list + target_masks_l_list)[:, 2:])
+
+                output = torch.masked_select(output, target_masks_list[:, 2:])
+                output_type = torch.masked_select(output_type, (target_masks_list + target_masks_l_list)[:, 2:])
+
+                self.test_output_all.extend(output.tolist())
+                self.test_output_type_all.extend(output_type.tolist())
+                self.test_label_all.extend(label.tolist())
+                self.test_label_type_all.extend(label_type.tolist())
+
+            self.test_output_all = np.array(self.test_output_all).squeeze()
+            self.test_label_all = np.array(self.test_label_all).squeeze()
+            self.test_output_type_all = np.array(self.test_output_type_all).squeeze()
+            self.test_label_type_all = np.array(self.test_label_type_all).squeeze()
+
+            if self.metric == "rmse":
+                test_evals = np.stack(
+                    [np.sqrt(metrics.mean_squared_error(self.test_label_all, self.test_output_all)),
+                     metrics.roc_auc_score(self.test_label_type_all, self.test_output_type_all),
+                     ])
+            elif self.metric == "auc":
+                test_evals = np.stack(
+                    [metrics.roc_auc_score(self.test_label_all, self.test_output_all),
+                     metrics.roc_auc_score(self.test_label_type_all, self.test_output_type_all)
+                     ])
+
+        return test_evals
