@@ -92,6 +92,13 @@ class SoftKmeans:
 
         self.num_clusters = num_clusters
 
+    def normalize(self, embeddings, student_ids, unique_students):
+        for student in unique_students:
+            mask = student_ids == student
+            embeddings[mask] = F.normalize(embeddings[mask], p=2, dim=-1)
+
+        return embeddings
+
     def aggregate_embeddings(self, embeddings, student_ids, unique_students):
         aggregated_embeddings = []
         for student in unique_students:
@@ -104,14 +111,15 @@ class SoftKmeans:
         return torch.stack(aggregated_embeddings)
 
     def apply_constraints(self, embeddings, student_ids, behavior_embeddings, temperature=0.1, eps=1e-8):
-        embeddings = F.normalize(embeddings, p=2, dim=-1)
-        behavior_embeddings = F.normalize(behavior_embeddings, p=2, dim=-1)
-
         unique_students = torch.unique(student_ids)
+        
+        embeddings = self.normalize(embeddings, student_ids, unique_students)
+        behavior_embeddings = self.normalize(behavior_embeddings, student_ids, unique_students)
+
         aggregated_embeddings = self.aggregate_embeddings(embeddings, student_ids, unique_students)
         aggregated_behavior_embeddings = self.aggregate_embeddings(behavior_embeddings, student_ids, unique_students)
 
-        aggregated_behavior_embeddings = torch.concat([aggregated_embeddings.detach(), aggregated_behavior_embeddings], 1)
+        # aggregated_behavior_embeddings = torch.concat([aggregated_embeddings.detach(), aggregated_behavior_embeddings], 1)
 
         local_kmeans = KMeans(self.num_clusters, random_state=42)
         cluster_assig = local_kmeans.fit_predict(aggregated_behavior_embeddings)
@@ -131,9 +139,14 @@ class SoftKmeans:
                 intra_cluster_distances[mask] = distances[mask][:, mask].mean(dim=1)
                 nearest_cluster_distances[mask] = cluster_distances[mask][:, cluster_ids != cluster_id].min(dim=1)[0]
 
-        loss = (nearest_cluster_distances - intra_cluster_distances) / (torch.maximum(intra_cluster_distances, nearest_cluster_distances) + eps)
-        loss = torch.exp(-loss / temperature)
-        total_loss = loss.mean()
+        sil_loss = (nearest_cluster_distances - intra_cluster_distances) / (torch.maximum(intra_cluster_distances, nearest_cluster_distances) + eps)
+        sil_loss = torch.exp(-sil_loss / temperature)
+
+        distances = torch.cdist(embeddings, embeddings, p=2)
+        distances = torch.triu(distances, diagonal=1)
+        user_loss = distances[student_ids.unsqueeze(1) == student_ids.unsqueeze(0)].sum() / (len(student_ids) * (len(student_ids)-1) / 2)
+
+        total_loss = (sil_loss.mean() + user_loss) / 2
 
         print("Total clustering loss", total_loss.detach().item())
 

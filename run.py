@@ -1,9 +1,9 @@
 import pickle
 from easydict import EasyDict
 
-from trainer.trainer import trainer_mat_pers as trainer
+# from trainer.trainer import trainer_mat_pers as trainer
 # from trainer.trainer import trainer_mat_nopers as trainer
-# from trainer.trainer import trainer_pers_nomat as trainer
+from trainer.trainer import trainer_pers_nomat as trainer
 
 
 def experiment(config):

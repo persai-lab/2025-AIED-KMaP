@@ -157,26 +157,24 @@ class trainer_mat_pers:
         next_pos_embed_ = next_pos_embed_q.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_q]
         next_neg_embeds_ = [next_neg_embeds_q[idx].permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_q] for idx in range(num_neg_sampling)]
         triplet_loss_q = self.ntxent_loss(pred_embed_, next_pos_embed_, next_neg_embeds_)
-        prior_loss_q = (pred_embed_.norm(dim=-1) ** 2).mean() + (next_pos_embed_.norm(dim=-1) ** 2).mean() + sum([(next_neg_embeds_[idx].norm(dim=-1) ** 2).mean() for idx in range(num_neg_sampling)])
 
         pred_embed_ = pred_embed_l.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_l]
         next_pos_embed_ = next_pos_embed_l.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_l]
         next_neg_embeds_ = [next_neg_embeds_l[idx].permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_l] for idx in range(num_neg_sampling)]
         triplet_loss_l = self.ntxent_loss(pred_embed_, next_pos_embed_, next_neg_embeds_)
-        prior_loss_l = (pred_embed_.norm(dim=-1) ** 2).mean() + (next_pos_embed_.norm(dim=-1) ** 2).mean() + sum([(next_neg_embeds_[idx].norm(dim=-1) ** 2).mean() for idx in range(num_neg_sampling)])
 
         # calculate reconstruction loss
         pred_dec_q = pred_dec_q.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_q]
         next_dec_q = next_dec_q.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_q]
         pred_dec_gt_q = pred_dec_gt_q.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_q]
         next_dec_gt_q = next_dec_gt_q.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_q]
-        reconstruction_loss_q = self.mse_criterion(torch.concat([pred_dec_q, next_dec_q]), torch.concat([next_dec_gt_q, pred_dec_gt_q])) + 0.0001*prior_loss_q
+        reconstruction_loss_q = self.mse_criterion(torch.concat([pred_dec_q, next_dec_q]), torch.concat([next_dec_gt_q, pred_dec_gt_q]))
 
         pred_dec_l = pred_dec_l.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_l]
         next_dec_l = next_dec_l.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_l]
         pred_dec_gt_l = pred_dec_gt_l.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_l]
         next_dec_gt_l = next_dec_gt_l.permute(0, 2, 1).flatten(0, 1)[flattened_target_masks_l]
-        reconstruction_loss_l = self.mse_criterion(torch.concat([pred_dec_l, next_dec_l]), torch.concat([next_dec_gt_l, pred_dec_gt_l])) + 0.0001*prior_loss_l
+        reconstruction_loss_l = self.mse_criterion(torch.concat([pred_dec_l, next_dec_l]), torch.concat([next_dec_gt_l, pred_dec_gt_l]))
 
         if evaluation:
             features = torch.concat([next_pos_embed_q.unsqueeze(0), next_neg_embeds_q], 0)
@@ -622,8 +620,8 @@ class trainer_mat_pers:
 class trainer_mat_nopers(trainer_mat_pers):
 
     def init_model(self, data):
-        # self.data_loader = KTBM_DataLoader_personalized(self.config, data, random_state=self.config.seed)
-        self.data_loader = KTBM_DataLoader_personalized_stateful(self.config, data, random_state=self.config.seed)
+        self.data_loader = KTBM_DataLoader_personalized(self.config, data, random_state=self.config.seed)
+        # self.data_loader = KTBM_DataLoader_personalized_stateful(self.config, data, random_state=self.config.seed)
         self.config.num_students = self.data_loader.num_students
         self.model = KTBM_mat_nopers(self.config)
         self.model.initialize()

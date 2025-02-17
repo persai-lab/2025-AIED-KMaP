@@ -1,5 +1,6 @@
 import random
 import numpy as np
+from sklearn.cluster import KMeans
 import torch
 import torch.nn as nn
 from model.modules import MultiHeadAttentionModule
@@ -1319,15 +1320,6 @@ class KTBM_pers_nomat(nn.Module):
         self.q_embed_matrix = nn.Embedding(num_embeddings=self.num_questions + 1, embedding_dim=self.embedding_size_q, padding_idx=0)
         self.l_embed_matrix = nn.Embedding(num_embeddings=self.num_nongradable_items + 1, embedding_dim=self.embedding_size_l, padding_idx=0)
 
-        self.q_corr_weight_matrix = nn.Sequential(
-            nn.Embedding(num_embeddings=self.num_questions + 1, embedding_dim=self.num_concepts, padding_idx=0),
-            nn.Softmax(-1)
-        )
-        self.l_corr_weight_matrix = nn.Sequential(
-            nn.Embedding(num_embeddings=self.num_nongradable_items + 1, embedding_dim=self.num_concepts, padding_idx=0),
-            nn.Softmax(-1)
-        )
-
         if self.metric == "rmse":
             self.a_embed_matrix = nn.Linear(1, self.embedding_size_a)
         else:
@@ -1340,6 +1332,12 @@ class KTBM_pers_nomat(nn.Module):
         self.l_behavior_embed_matrix = nn.Embedding(num_embeddings=self.num_nongradable_items + 1, embedding_dim=self.embedding_size_l_behavior, padding_idx=0)
 
     def init_knowledge_module(self):
+        self.key_matrix = torch.Tensor(self.num_concepts, self.key_dim).to(self.device)
+        nn.init.normal_(self.key_matrix, mean=0, std=self.init_std)
+
+        self.mapQ_key = nn.Linear(self.embedding_size_q, self.key_dim)
+        self.mapL_key = nn.Linear(self.embedding_size_l, self.key_dim)
+
         self.erase_E_Q = nn.Linear(self.embedding_size_q + self.embedding_size_a, self.value_dim, bias=True)
         self.erase_E_L = nn.Linear(self.embedding_size_l, self.value_dim, bias=True)
         self.erase_E_bh = nn.Linear(self.behavior_hidden_size, self.value_dim, bias=False)
@@ -1350,7 +1348,7 @@ class KTBM_pers_nomat(nn.Module):
         self.add_D_bh = nn.Linear(self.behavior_hidden_size, self.value_dim, bias=False)
         self.add_D_stu = nn.Linear(self.embedding_size_s, self.value_dim, bias=False)
 
-        self.transition_proj_M = nn.Linear(2*self.embedding_size_d, self.value_dim, bias=True)
+        self.transition_proj_M = nn.Linear(2*self.embedding_size_d, self.value_dim, bias=False)
 
         self.linear_out = nn.Sequential(
             nn.Linear(self.embedding_size_q + self.value_dim + self.behavior_hidden_size, self.summary_dim),
@@ -1395,9 +1393,9 @@ class KTBM_pers_nomat(nn.Module):
     def initialize_states(self):
         self.stateful_hidden_states = torch.zeros(self.num_students, self.behavior_hidden_size)
         self.stateful_cell_states = torch.zeros(self.num_students, self.behavior_hidden_size)
-        self.stateful_value_matrix = torch.Tensor(self.num_students, self.num_concepts, self.value_dim).to(self.device)
+        self.stateful_value_matrix = torch.Tensor(self.num_students, self.num_concepts, self.value_dim)
         nn.init.normal_(self.stateful_value_matrix, mean=0., std=self.init_std)
-    
+
     def forward(self, q_data, a_data, l_data, d_data, s_data, evaluation=False):
         '''
            get output of the model
@@ -1411,9 +1409,14 @@ class KTBM_pers_nomat(nn.Module):
         batch_size, seq_len = q_data.size(0), q_data.size(1)
 
         # inintialize h0 and m0 and value matrix
-        self.h = self.stateful_hidden_states[s_data].detach().clone()
-        self.m = self.stateful_cell_states[s_data].detach().clone()
-        self.value_matrix = self.stateful_value_matrix[s_data].detach().clone()
+        self.h = self.stateful_hidden_states[s_data].clone()
+        self.m = self.stateful_cell_states[s_data].clone()
+        self.value_matrix = self.stateful_value_matrix[s_data].clone()
+        # self.h = torch.zeros(batch_size, self.behavior_hidden_size).to(self.device)
+        # self.m = torch.zeros(batch_size, self.behavior_hidden_size).to(self.device)
+        # self.value_matrix_init = torch.Tensor(self.num_concepts, self.value_dim).to(self.device)
+        # nn.init.normal_(self.value_matrix_init, mean=0., std=self.init_std)
+        # self.value_matrix = self.value_matrix_init.clone().repeat(batch_size, 1, 1)
 
         # get embeddings of learning material and response
         q_embed_data = self.q_embed_matrix(q_data.long()) # (b, 100) -> (b, 100, 32)
@@ -1430,9 +1433,6 @@ class KTBM_pers_nomat(nn.Module):
         q_behavior_embed_data = self.q_behavior_embed_matrix(q_data)
         l_behavior_embed_data = self.l_behavior_embed_matrix(l_data)
 
-        q_corr_weight = self.q_corr_weight_matrix(q_data.long())
-        l_corr_weight = self.l_corr_weight_matrix(l_data.long())
-
         # split the data seq into chunk and process each question sequentially, and get embeddings of each learning material
         sliced_q_embed_data = torch.chunk(q_embed_data, seq_len, dim=1)
         sliced_a_embed_data = torch.chunk(a_embed_data, seq_len, dim=1)
@@ -1441,8 +1441,6 @@ class KTBM_pers_nomat(nn.Module):
         sliced_q_behavior_embed_data = torch.chunk(q_behavior_embed_data, seq_len, dim=1)
         sliced_l_behavior_embed_data = torch.chunk(l_behavior_embed_data, seq_len, dim=1)
         sliced_d_data = torch.chunk(d_data, seq_len, dim=1)
-        sliced_q_corr_weight = torch.chunk(q_corr_weight, seq_len, dim=1)
-        sliced_l_corr_weight = torch.chunk(l_corr_weight, seq_len, dim=1)
 
         batch_pred, batch_pred_type = [], []
         for i in range(1, seq_len - 1):
@@ -1456,12 +1454,9 @@ class KTBM_pers_nomat(nn.Module):
             l_b = sliced_l_behavior_embed_data[i].squeeze(1)
             d_t = sliced_d_data[i]
             d_t_1 = sliced_d_data[i - 1]
-            correlation_weight_q_curr = sliced_q_corr_weight[i].squeeze(1)
-            correlation_weight_l_curr = sliced_l_corr_weight[i].squeeze(1)
-            correlation_weight_q_next = sliced_q_corr_weight[i + 1].squeeze(1)
 
             #update knowledge state
-            self.knowledge_MANN(q, a, l, d_t, d_t_1, s_embed_data, correlation_weight_q_curr, correlation_weight_l_curr, d, d_1)
+            self.knowledge_MANN(q, a, l, d_t, d_t_1, s_embed_data, d, d_1)
 
             #update behavior prefrence
             self.behavior_LSTM(q_b, d, l_b, d_t, s_embed_data) 
@@ -1476,7 +1471,9 @@ class KTBM_pers_nomat(nn.Module):
 
             #predict response
             q_next = sliced_q_embed_data[i + 1].squeeze(1)  # (batch_size, key_dim)
-            read_content_next = self.read(correlation_weight_q_next, d_t)
+            q_read_key_next = self.mapQ_key(q_next)
+            correlation_weight_next = self.compute_correlation_weight(q_read_key_next)
+            read_content_next = self.read(correlation_weight_next, d_t)
             batch_sliced_pred = self.linear_out(torch.cat([read_content_next, q_next, self.h], dim = 1))
             batch_pred.append(batch_sliced_pred)
 
@@ -1488,10 +1485,30 @@ class KTBM_pers_nomat(nn.Module):
         batch_pred_type = torch.cat(batch_pred_type, dim=-1)
 
         return batch_pred, batch_pred_type
-    
-    def knowledge_MANN(self, q, a, l, d_t, d_t_1, s_embed_data, correlation_weight_q, correlation_weight_l, d, d_1):
+
+    def compute_correlation_weight(self, query_embedded):
+        """
+        use dot product to find the similarity between question embedding and each concept
+        embedding stored as key_matrix
+        where key-matrix could be understood as all concept embedding covered by the course.
+        query_embeded : (batch_size, concept_embedding_dim)
+        key_matrix : (num_concepts, concept_embedding_dim)
+        output: is the correlation distribution between question and all concepts
+        """
+
+        similarity = query_embedded @ self.key_matrix.t()
+        correlation_weight = torch.softmax(similarity, dim=1)
+        return correlation_weight
+
+    def knowledge_MANN(self, q, a, l, d_t, d_t_1, s_embed_data, d, d_1):
         qa = torch.cat([q, a], dim=1)
-        correlation_weight = (1 - d_t) * correlation_weight_q + d_t * correlation_weight_l
+        q_read_key = self.mapQ_key(q)
+        l_read_key = self.mapL_key(l)
+
+        lnmt_embedded = (1 - d_t) * q_read_key + d_t * l_read_key  # learning material embedding mapped to concept for getting knowledge
+
+        correlation_weight = self.compute_correlation_weight(lnmt_embedded)
+
         self.value_matrix = self.write(correlation_weight, qa, l, d_t, d_t_1, s_embed_data, d, d_1)
 
     def write(self, correlation_weight, qa_embed, l_embed, d_t, d_t_1, s_embed_data, d, d_1):
@@ -1503,18 +1520,18 @@ class KTBM_pers_nomat(nn.Module):
                 """
         batch_size = self.value_matrix.size(0)
 
-        erase_vector = (1-d_t) * self.erase_E_Q(qa_embed) + d_t*self.erase_E_L(l_embed) + self.erase_E_stu(s_embed_data) + self.erase_E_bh(self.h) # (batch_size, value_dim)
+        erase_vector = (1-d_t) * self.erase_E_Q(qa_embed) + d_t*self.erase_E_L(l_embed) + self.erase_E_bh(self.h) #+ self.erase_E_stu(s_embed_data) # (batch_size, value_dim)
         erase_vector = self.sigmoid(erase_vector)
 
-        add_vector = (1-d_t)*self.add_D_Q(qa_embed) + d_t*self.add_D_L(l_embed) + self.add_D_stu(s_embed_data) + self.add_D_bh(self.h)   # (batch_size, value_dim)
+        add_vector = (1-d_t)*self.add_D_Q(qa_embed) + d_t*self.add_D_L(l_embed) + self.add_D_bh(self.h) #+ self.add_D_stu(s_embed_data)   # (batch_size, value_dim)
         add_vector = self.tanh(add_vector)
 
         erase_reshaped = erase_vector.reshape(batch_size, 1, self.value_dim)
         cw_reshaped = correlation_weight.reshape(batch_size, self.num_concepts, 1)  # the multiplication is to generate weighted erase vector for each memory cell, therefore, the size is (batch_size, num_concepts, value_dim)
         erase_mul = erase_reshaped * cw_reshaped
 
-        transition = self.transition_proj_M(torch.concat([d_1, d], -1)).reshape(-1, 1, self.value_dim)
-        memory_after_erase = self.tanh(transition) * self.value_matrix * (1 - erase_mul)
+        transition = self.tanh(self.transition_proj_M(torch.concat([d_1, d], -1)).reshape(-1, 1, self.value_dim))
+        memory_after_erase = (self.value_matrix * transition) * (1 - erase_mul)
 
         add_reshaped = add_vector.reshape(batch_size, 1, self.value_dim)  # the multiplication is to generate weighted add vector for each memory cell therefore, the size is (batch_size, num_concepts, value_dim)
         add_memory = add_reshaped * cw_reshaped
@@ -1550,8 +1567,8 @@ class KTBM_pers_nomat(nn.Module):
 
         d_1 = self.d_embed_matrix(d_t)
         d = self.d_embed_matrix(torch.zeros_like(d_t))
-        transition = self.transition_proj_M(torch.concat([d_1, d], -1)).reshape(-1, 1, self.value_dim)
-        value_matrix_reshaped = self.tanh(transition) * self.value_matrix
+        transition = self.tanh(self.transition_proj_M(torch.concat([d_1, d], -1)).reshape(-1, 1, self.value_dim))
+        value_matrix_reshaped = self.value_matrix * transition
 
         value_matrix_reshaped = value_matrix_reshaped.reshape(batch_size * self.num_concepts, self.value_dim)
         correlation_weight_reshaped = correlation_weight.reshape(batch_size * self.num_concepts, 1)
