@@ -8,10 +8,10 @@ from utils.metrics import Metrics
 import torch.nn.functional as F
 
 
-class KTBM_mat_pers(nn.Module):
+class KMaP(nn.Module):
 
     def __init__(self, config):
-        super(KTBM_mat_pers, self).__init__()
+        super(KMaP, self).__init__()
 
         self.is_cuda = torch.cuda.is_available()
         self.cuda = self.is_cuda & config.cuda
@@ -141,9 +141,9 @@ class KTBM_mat_pers(nn.Module):
         self.behavior_prefrence = nn.Linear(self.behavior_hidden_size, 1, bias=True)
 
     def initialize_states(self):
-        self.stateful_hidden_states = torch.zeros(self.num_students, self.behavior_hidden_size)
-        self.stateful_cell_states = torch.zeros(self.num_students, self.behavior_hidden_size)
-        self.stateful_value_matrix = torch.Tensor(self.num_students, self.num_concepts, self.value_dim).to(self.device)
+        self.stateful_hidden_states = torch.zeros(self.num_students, self.behavior_hidden_size, device=self.device)
+        self.stateful_cell_states = torch.zeros(self.num_students, self.behavior_hidden_size, device=self.device)
+        self.stateful_value_matrix = torch.zeros(self.num_students, self.num_concepts, self.value_dim, device=self.device)
         nn.init.normal_(self.stateful_value_matrix, mean=0., std=self.init_std)
 
     def init_material_pred_module(self):
@@ -640,10 +640,10 @@ class KTBM_mat_pers(nn.Module):
         return read_content
 
 
-class KTBM_mat_nopers(nn.Module):
+class KMaP_M(nn.Module):
 
     def __init__(self, config):
-        super(KTBM_mat_nopers, self).__init__()
+        super(KMaP_M, self).__init__()
 
         self.is_cuda = torch.cuda.is_available()
         self.cuda = self.is_cuda & config.cuda
@@ -1264,10 +1264,10 @@ class KTBM_mat_nopers(nn.Module):
         return read_content
     
 
-class KTBM_pers_nomat(nn.Module):
+class KMaP_P(nn.Module):
 
     def __init__(self, config):
-        super(KTBM_pers_nomat, self).__init__()
+        super(KMaP_P, self).__init__()
 
         self.is_cuda = torch.cuda.is_available()
         self.cuda = self.is_cuda & config.cuda
@@ -1391,9 +1391,9 @@ class KTBM_pers_nomat(nn.Module):
         self.behavior_prefrence = nn.Linear(self.behavior_hidden_size, 1, bias=True)
 
     def initialize_states(self):
-        self.stateful_hidden_states = torch.zeros(self.num_students, self.behavior_hidden_size)
-        self.stateful_cell_states = torch.zeros(self.num_students, self.behavior_hidden_size)
-        self.stateful_value_matrix = torch.Tensor(self.num_students, self.num_concepts, self.value_dim)
+        self.stateful_hidden_states = torch.zeros(self.num_students, self.behavior_hidden_size, device=self.device)
+        self.stateful_cell_states = torch.zeros(self.num_students, self.behavior_hidden_size, device=self.device)
+        self.stateful_value_matrix = torch.zeros(self.num_students, self.num_concepts, self.value_dim, device=self.device)
         nn.init.normal_(self.stateful_value_matrix, mean=0., std=self.init_std)
 
     def forward(self, q_data, a_data, l_data, d_data, s_data, evaluation=False):
@@ -1412,11 +1412,6 @@ class KTBM_pers_nomat(nn.Module):
         self.h = self.stateful_hidden_states[s_data].clone()
         self.m = self.stateful_cell_states[s_data].clone()
         self.value_matrix = self.stateful_value_matrix[s_data].clone()
-        # self.h = torch.zeros(batch_size, self.behavior_hidden_size).to(self.device)
-        # self.m = torch.zeros(batch_size, self.behavior_hidden_size).to(self.device)
-        # self.value_matrix_init = torch.Tensor(self.num_concepts, self.value_dim).to(self.device)
-        # nn.init.normal_(self.value_matrix_init, mean=0., std=self.init_std)
-        # self.value_matrix = self.value_matrix_init.clone().repeat(batch_size, 1, 1)
 
         # get embeddings of learning material and response
         q_embed_data = self.q_embed_matrix(q_data.long()) # (b, 100) -> (b, 100, 32)

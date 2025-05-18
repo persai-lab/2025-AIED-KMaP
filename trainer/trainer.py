@@ -9,9 +9,9 @@ from sklearn import metrics
 from torch import nn
 from torch.backends import cudnn
 
-from dataloader.dataloader import (KTBM_DataLoader_personalized,
-                                   KTBM_DataLoader_personalized_stateful)
-from model.KTBM import KTBM_mat_nopers, KTBM_mat_pers, KTBM_pers_nomat
+from dataloader.dataloader import (DataLoader_personalized,
+                                   DataLoader_personalized_stateful)
+from model.KMAP import KMaP, KMaP_M, KMaP_P
 from model.modules import SoftKmeans
 from utils.metrics import Metrics
 
@@ -19,7 +19,7 @@ warnings.filterwarnings("ignore")
 cudnn.benchmark = True
 
 
-class trainer_mat_pers:
+class trainer_KMaP:
 
     def __init__(self, config, data):
         self.config = config
@@ -27,29 +27,12 @@ class trainer_mat_pers:
         self.metric = config.metric
 
         self.manual_seed = config.seed
-        self.device = torch.device("cpu")
 
         self.current_epoch = 1
-
-        self.task_train_losses = []
-        self.task_test_losses = []
-        self.train_evals = []
-        self.test_evals = []
-
-        self.init_model(data)
-
-        self.metrics = Metrics(config.top_k_metrics)
-
-        print('==>>> total number of trainable parameters: {}'.format(sum(p.numel() for p in self.model.parameters() if p.requires_grad)))
-        print('==>>> total number of parameters: {}'.format(sum(p.numel() for p in self.model.parameters())))
-        print('==>>> total trainning batch number: {}'.format(len(self.data_loader.train_loader)))
-        print('==>>> total testing batch number: {}'.format(len(self.data_loader.test_loader)))
 
         self.mse_criterion = nn.MSELoss(reduction='mean')
         self.bce_criterion = nn.BCEWithLogitsLoss(reduction='mean')
         self.ce_criterion = nn.CrossEntropyLoss(reduction='mean')
-        
-        self.init_optimizer()
 
         self.is_cuda = torch.cuda.is_available()
         if self.is_cuda and not self.config.cuda:
@@ -60,7 +43,6 @@ class trainer_mat_pers:
         if self.cuda:
             torch.cuda.manual_seed(self.manual_seed)
             self.device = torch.device("cuda")
-            self.model = self.model.to(self.device)
             self.mse_criterion = self.mse_criterion.to(self.device)
             self.bce_criterion = self.bce_criterion.to(self.device)
             self.ce_criterion = self.ce_criterion.to(self.device)
@@ -73,13 +55,30 @@ class trainer_mat_pers:
             self.logger.info("Program will run on *****CPU*****\n")
             print("Program will run on *****CPU*****\n")
 
+        self.task_train_losses = []
+        self.task_test_losses = []
+        self.train_evals = []
+        self.test_evals = []
+
+        self.init_model(data)
+        self.model = self.model.to(self.device)
+
+        self.metrics = Metrics(config.top_k_metrics)
+
+        print('==>>> total number of trainable parameters: {}'.format(sum(p.numel() for p in self.model.parameters() if p.requires_grad)))
+        print('==>>> total number of parameters: {}'.format(sum(p.numel() for p in self.model.parameters())))
+        print('==>>> total trainning batch number: {}'.format(len(self.data_loader.train_loader)))
+        print('==>>> total testing batch number: {}'.format(len(self.data_loader.test_loader)))
+        
+        self.init_optimizer()
+
     def init_model(self, data):
-        self.data_loader = KTBM_DataLoader_personalized_stateful(self.config, data, random_state=self.config.seed)
+        self.data_loader = DataLoader_personalized_stateful(self.config, data, random_state=self.config.seed)
         self.config.num_students = self.data_loader.num_students
-        self.model = KTBM_mat_pers(self.config)
+        self.model = KMaP(self.config)
         self.model.initialize()
 
-        self.kmeans = SoftKmeans(self.config.num_clusters)
+        self.kmeans = SoftKmeans(self.config.num_clusters, device=self.device)
 
     def init_optimizer(self):
         if self.config.optimizer == "sgd":
@@ -143,13 +142,13 @@ class trainer_mat_pers:
         contrastive_ = torch.concat([contrastive_neg_.unsqueeze(2) for contrastive_neg_ in contrastive_neg_q], 2)
         contrastive_ = torch.concat([contrastive_pos_q.unsqueeze(2), contrastive_], 2)
         contrastive_preds_q = contrastive_.flatten(0, 1)
-        contrastive_labels_q = torch.zeros(contrastive_preds_q.shape[0],).to(torch.long)
+        contrastive_labels_q = torch.zeros(contrastive_preds_q.shape[0], device=self.device).to(torch.long)
         contrastive_loss_q = self.ce_criterion(contrastive_preds_q[flattened_target_masks_q], contrastive_labels_q[flattened_target_masks_q])
 
         contrastive_ = torch.concat([contrastive_neg_.unsqueeze(2) for contrastive_neg_ in contrastive_neg_l], 2)
         contrastive_ = torch.concat([contrastive_pos_l.unsqueeze(2), contrastive_], 2)
         contrastive_preds_l = contrastive_.flatten(0, 1)
-        contrastive_labels_l = torch.zeros(contrastive_preds_l.shape[0],).to(torch.long)
+        contrastive_labels_l = torch.zeros(contrastive_preds_l.shape[0], device=self.device).to(torch.long)
         contrastive_loss_l = self.ce_criterion(contrastive_preds_l[flattened_target_masks_l], contrastive_labels_l[flattened_target_masks_l])
 
         # calculate triplet/ntxent loss
@@ -181,7 +180,7 @@ class trainer_mat_pers:
             features = features.permute(1, 3, 0, 2).flatten(0, 1)
             preds = pred_embed_q.unsqueeze(0).repeat(num_neg_sampling+1, 1, 1, 1)
             preds = preds.permute(1, 3, 0, 2).flatten(0, 1)
-            targets = torch.zeros(*features.shape[:2])
+            targets = torch.zeros(*features.shape[:2], device=self.device)
             targets[:, 0] = 1
             dist = torch.nn.functional.pairwise_distance(features, preds, p=2)
             sims = -dist
@@ -192,7 +191,7 @@ class trainer_mat_pers:
             features = features.permute(1, 3, 0, 2).flatten(0, 1)
             preds = pred_embed_l.unsqueeze(0).repeat(num_neg_sampling+1, 1, 1, 1)
             preds = preds.permute(1, 3, 0, 2).flatten(0, 1)
-            targets = torch.zeros(*features.shape[:2])
+            targets = torch.zeros(*features.shape[:2], device=self.device)
             targets[:, 0] = 1
             dist = torch.nn.functional.pairwise_distance(features, preds, p=2)
             sims = -dist
@@ -396,10 +395,10 @@ class trainer_mat_pers:
 
                 self.train_output_all.extend(output.tolist())
                 self.train_output_type_all.extend(output_type.tolist())
-                self.train_contrastive_all.extend(metrics_q["contrastive_preds"])
+                self.train_contrastive_all.extend(metrics_q["contrastive_preds"].detach().cpu())
                 self.train_label_all.extend(label.tolist())
                 self.train_label_type_all.extend(label_type.tolist())
-                self.train_label_contrastive_all.extend(metrics_q["contrastive_labels"])
+                self.train_label_contrastive_all.extend(metrics_q["contrastive_labels"].detach().cpu())
 
                 self.train_q_hitratios.append(metrics_q["hitratio_q"])
                 self.train_q_ndcgs.append(metrics_q["ndcg_q"])
@@ -458,10 +457,10 @@ class trainer_mat_pers:
 
                 self.test_output_all.extend(output.tolist())
                 self.test_output_type_all.extend(output_type.tolist())
-                self.test_contrastive_all.extend(metrics_q["contrastive_preds"])
+                self.test_contrastive_all.extend(metrics_q["contrastive_preds"].detach().cpu())
                 self.test_label_all.extend(label.tolist())
                 self.test_label_type_all.extend(label_type.tolist())
-                self.test_label_contrastive_all.extend(metrics_q["contrastive_labels"])
+                self.test_label_contrastive_all.extend(metrics_q["contrastive_labels"].detach().cpu())
 
                 self.test_q_hitratios.append(metrics_q["hitratio_q"])
                 self.test_q_ndcgs.append(metrics_q["ndcg_q"])
@@ -525,11 +524,11 @@ class trainer_mat_pers:
         self.scheduler.step(np.sum(self.task_train_losses[-1]))
 
     def save_weights(self):
-        if not os.path.isdir(f"checkpoints_{self.config.data_name}_proposed_mat_pers"):
-            os.makedirs((f"checkpoints_{self.config.data_name}_proposed_mat_pers"))
+        if not os.path.isdir(f"checkpoints_{self.config.data_name}_proposed_KMaP"):
+            os.makedirs((f"checkpoints_{self.config.data_name}_proposed_KMaP"))
 
         if self.current_epoch % self.config.save_checkpoint_every == 0:
-            torch.save(self.model.cpu().state_dict(), os.path.join(f"checkpoints_{self.config.data_name}_proposed_mat_pers", "checkpoint-{:04}.pt".format(self.current_epoch)))
+            torch.save(self.model.state_dict(), os.path.join(f"checkpoints_{self.config.data_name}_proposed_KMaP", "checkpoint-{:04}.pt".format(self.current_epoch)))
 
     def validate_for_hypo_test(self, test_loader):
         self.model.initialize_states()
@@ -617,13 +616,13 @@ class trainer_mat_pers:
         return test_evals
 
 
-class trainer_mat_nopers(trainer_mat_pers):
+class trainer_KMaP_M(trainer_KMaP):
 
     def init_model(self, data):
-        self.data_loader = KTBM_DataLoader_personalized(self.config, data, random_state=self.config.seed)
-        # self.data_loader = KTBM_DataLoader_personalized_stateful(self.config, data, random_state=self.config.seed)
+        self.data_loader = DataLoader_personalized(self.config, data, random_state=self.config.seed)
+        # self.data_loader = DataLoader_personalized_stateful(self.config, data, random_state=self.config.seed)
         self.config.num_students = self.data_loader.num_students
-        self.model = KTBM_mat_nopers(self.config)
+        self.model = KMaP_M(self.config)
         self.model.initialize()
 
     def init_optimizer(self):
@@ -788,10 +787,10 @@ class trainer_mat_nopers(trainer_mat_pers):
 
                 self.train_output_all.extend(output.tolist())
                 self.train_output_type_all.extend(output_type.tolist())
-                self.train_contrastive_all.extend(metrics_q["contrastive_preds"])
+                self.train_contrastive_all.extend(metrics_q["contrastive_preds"].detach().cpu())
                 self.train_label_all.extend(label.tolist())
                 self.train_label_type_all.extend(label_type.tolist())
-                self.train_label_contrastive_all.extend(metrics_q["contrastive_labels"])
+                self.train_label_contrastive_all.extend(metrics_q["contrastive_labels"].detach().cpu())
 
                 self.train_q_hitratios.append(metrics_q["hitratio_q"])
                 self.train_q_ndcgs.append(metrics_q["ndcg_q"])
@@ -850,10 +849,10 @@ class trainer_mat_nopers(trainer_mat_pers):
 
                 self.test_output_all.extend(output.tolist())
                 self.test_output_type_all.extend(output_type.tolist())
-                self.test_contrastive_all.extend(metrics_q["contrastive_preds"])
+                self.test_contrastive_all.extend(metrics_q["contrastive_preds"].detach().cpu())
                 self.test_label_all.extend(label.tolist())
                 self.test_label_type_all.extend(label_type.tolist())
-                self.test_label_contrastive_all.extend(metrics_q["contrastive_labels"])
+                self.test_label_contrastive_all.extend(metrics_q["contrastive_labels"].detach().cpu())
 
                 self.test_q_hitratios.append(metrics_q["hitratio_q"])
                 self.test_q_ndcgs.append(metrics_q["ndcg_q"])
@@ -917,11 +916,11 @@ class trainer_mat_nopers(trainer_mat_pers):
         self.scheduler.step(np.sum(self.task_train_losses[-1]))
 
     def save_weights(self):
-        if not os.path.isdir(f"checkpoints_{self.config.data_name}_proposed_mat_nopers"):
-            os.makedirs((f"checkpoints_{self.config.data_name}_proposed_mat_nopers"))
+        if not os.path.isdir(f"checkpoints_{self.config.data_name}_proposed_KMaP_M"):
+            os.makedirs((f"checkpoints_{self.config.data_name}_proposed_KMaP_M"))
 
         if self.current_epoch % self.config.save_checkpoint_every == 0:
-            torch.save(self.model.cpu().state_dict(), os.path.join(f"checkpoints_{self.config.data_name}_proposed_mat_nopers", "checkpoint-{:04}.pt".format(self.current_epoch)))
+            torch.save(self.model.state_dict(), os.path.join(f"checkpoints_{self.config.data_name}_proposed_KMaP_M", "checkpoint-{:04}.pt".format(self.current_epoch)))
 
     def validate_for_hypo_test(self, test_loader):
         self.model.eval()
@@ -1008,15 +1007,15 @@ class trainer_mat_nopers(trainer_mat_pers):
         return test_evals
 
 
-class trainer_pers_nomat(trainer_mat_pers):
+class trainer_KMaP_P(trainer_KMaP):
 
     def init_model(self, data):
-        self.data_loader = KTBM_DataLoader_personalized_stateful(self.config, data, random_state=self.config.seed)
+        self.data_loader = DataLoader_personalized_stateful(self.config, data, random_state=self.config.seed)
         self.config.num_students = self.data_loader.num_students
-        self.model = KTBM_pers_nomat(self.config)
+        self.model = KMaP_P(self.config)
         self.model.initialize()
 
-        self.kmeans = SoftKmeans(self.config.num_clusters)
+        self.kmeans = SoftKmeans(self.config.num_clusters, device=self.device)
 
     def train_one_epoch(self):
         self.model.initialize_states()
@@ -1190,11 +1189,11 @@ class trainer_pers_nomat(trainer_mat_pers):
         self.scheduler.step(np.sum(self.task_train_losses[-1]))
 
     def save_weights(self):
-        if not os.path.isdir(f"checkpoints_{self.config.data_name}_proposed_pers_nomat"):
-            os.makedirs((f"checkpoints_{self.config.data_name}_proposed_pers_nomat"))
+        if not os.path.isdir(f"checkpoints_{self.config.data_name}_proposed_KMaP_P"):
+            os.makedirs((f"checkpoints_{self.config.data_name}_proposed_KMaP_P"))
 
         if self.current_epoch % self.config.save_checkpoint_every == 0:
-            torch.save(self.model.cpu().state_dict(), os.path.join(f"checkpoints_{self.config.data_name}_proposed_pers_nomat", "checkpoint-{:04}.pt".format(self.current_epoch)))
+            torch.save(self.model.state_dict(), os.path.join(f"checkpoints_{self.config.data_name}_proposed_KMaP_P", "checkpoint-{:04}.pt".format(self.current_epoch)))
 
     def validate_for_hypo_test(self, test_loader):
         self.model.initialize_states()

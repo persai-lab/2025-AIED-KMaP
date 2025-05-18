@@ -1,9 +1,9 @@
 import pickle
 from easydict import EasyDict
 
-# from trainer.trainer import trainer_mat_pers as trainer
-# from trainer.trainer import trainer_mat_nopers as trainer
-from trainer.trainer import trainer_pers_nomat as trainer
+# from trainer.trainer import trainer_KMaP as trainer
+# from trainer.trainer import trainer_KMaP_M as trainer
+from trainer.trainer import trainer_KMaP_P as trainer
 
 
 def experiment(config):
@@ -21,7 +21,7 @@ def experiment(config):
 
 ednet_config = {
     "data_name": 'ednet',
-    "model_name": "KTBM",
+    "model_name": "KMaP",
 
     "mode": 'test',
     "fold": 1,
@@ -74,7 +74,7 @@ ednet_config = {
 }
 junyi_config = {
     "data_name": 'Junyi2063',
-    "model_name": 'KTBM',
+    "model_name": 'KMaP',
 
     "mode": 'test',
     "fold": 1,

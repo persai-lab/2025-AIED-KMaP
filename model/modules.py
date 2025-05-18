@@ -1,10 +1,9 @@
 import torch
-from torch import nn
 import torch.nn.functional as F
+from einops import rearrange
 from sklearn.cluster import KMeans
 from sklearn.neighbors import NearestCentroid
-
-from einops import rearrange
+from torch import nn
 
 
 class FeedForward(nn.Module):
@@ -87,10 +86,11 @@ class MultiHeadAttentionModule(nn.Module):
 
 class SoftKmeans:
 
-    def __init__(self, num_clusters):
+    def __init__(self, num_clusters, device):
         super().__init__()
 
         self.num_clusters = num_clusters
+        self.device = device
 
     def normalize(self, embeddings, student_ids, unique_students):
         for student in unique_students:
@@ -119,19 +119,17 @@ class SoftKmeans:
         aggregated_embeddings = self.aggregate_embeddings(embeddings, student_ids, unique_students)
         aggregated_behavior_embeddings = self.aggregate_embeddings(behavior_embeddings, student_ids, unique_students)
 
-        # aggregated_behavior_embeddings = torch.concat([aggregated_embeddings.detach(), aggregated_behavior_embeddings], 1)
-
         local_kmeans = KMeans(self.num_clusters, random_state=42)
-        cluster_assig = local_kmeans.fit_predict(aggregated_behavior_embeddings)
+        cluster_assig = local_kmeans.fit_predict(aggregated_behavior_embeddings.detach().cpu())
         clf = NearestCentroid()
-        clf.fit(aggregated_embeddings.detach().numpy(), cluster_assig)
-        cluster_centroids = torch.tensor(clf.centroids_).float()
+        clf.fit(aggregated_embeddings.detach().cpu().numpy(), cluster_assig)
+        cluster_centroids = torch.tensor(clf.centroids_, device=self.device).to(torch.float32)
         cluster_distances = torch.cdist(aggregated_embeddings, cluster_centroids, p=2) 
         cluster_assignments = cluster_distances.argmin(1)
         
         cluster_ids = torch.arange(0, self.num_clusters)
-        intra_cluster_distances = torch.zeros(aggregated_embeddings.shape[0])
-        nearest_cluster_distances = torch.zeros(aggregated_embeddings.shape[0])
+        intra_cluster_distances = torch.zeros(aggregated_embeddings.shape[0], device=self.device)
+        nearest_cluster_distances = torch.zeros(aggregated_embeddings.shape[0], device=self.device)
         distances = torch.cdist(aggregated_embeddings, aggregated_embeddings)
         for cluster_id in range(self.num_clusters):
             mask = (cluster_assignments == cluster_id)

@@ -8,8 +8,10 @@ from sklearn.model_selection import KFold, train_test_split
 from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.data.dataloader import default_collate
 
+np.random.seed(42)
 
-class KTBM_DataLoader_personalized:
+
+class DataLoader_personalized:
 
     def __init__(self, config, data, random_state=None):
         self.random_state = random_state
@@ -174,7 +176,7 @@ class KTBM_DataLoader_personalized:
             yield DataLoader(test_split, batch_size=self.batch_size)
 
 
-class MyDataset(torch.utils.data.Dataset):
+class Dataset(torch.utils.data.Dataset):
 
     def __init__(self, data_q, data_a, data_l, data_d, data_s, target_answers, target_masks, target_masks_l, train_split):
         self.data_q = data_q
@@ -217,8 +219,6 @@ class CustomBatchSampler(torch.utils.data.sampler.Sampler):
         self.init_budgets = np.array(list(map(len, sequences)))
         self.init_sequences = sequences
 
-        np.random.seed(42)
-
     def initialize(self):
         self.budgets = copy.deepcopy(self.init_budgets)
         self.sequences = copy.deepcopy(self.init_sequences)
@@ -242,7 +242,7 @@ class CustomBatchSampler(torch.utils.data.sampler.Sampler):
         return np.ceil(self.init_budgets.sum() / self.batch_size).astype(int)
 
 
-class KTBM_DataLoader_personalized_stateful:
+class DataLoader_personalized_stateful:
 
     def __init__(self, config, data, random_state=None):
         self.random_state = random_state
@@ -286,12 +286,12 @@ class KTBM_DataLoader_personalized_stateful:
         test_target_masks = (test_data_q != 0)
         test_target_masks_l = (test_data_l != 0)
 
-        train_dataset = MyDataset(train_data_q, train_data_a, train_data_l, train_data_d, train_data_s, train_target_answers, train_target_masks, train_target_masks_l, train_split=True)
+        train_dataset = Dataset(train_data_q, train_data_a, train_data_l, train_data_d, train_data_s, train_target_answers, train_target_masks, train_target_masks_l, train_split=True)
         
         sampler = CustomBatchSampler(train_idx_data, batch_size=self.batch_size)
         self.train_loader = DataLoader(train_dataset, sampler=sampler, collate_fn=lambda batch: tuple(map(torch.tensor, batch[0])))
 
-        self.test_dataset = MyDataset(test_data_q, test_data_a, test_data_l, test_data_d, test_data_s, test_target_answers, test_target_masks, test_target_masks_l, train_split=False)
+        self.test_dataset = Dataset(test_data_q, test_data_a, test_data_l, test_data_d, test_data_s, test_target_answers, test_target_masks, test_target_masks_l, train_split=False)
         sampler = CustomBatchSampler(test_idx_data, batch_size=self.batch_size)
         self.test_loader = DataLoader(self.test_dataset, sampler=sampler, collate_fn=lambda batch: tuple(map(torch.tensor, batch[0])))
 
@@ -336,11 +336,6 @@ class KTBM_DataLoader_personalized_stateful:
             l_patches = list(miter.windowed(l_list, max_seq_len, fillvalue=0, step=stride-2))
             d_patches = list(miter.windowed(d_list, max_seq_len, fillvalue=0, step=stride-2))
 
-            # q_patches = self.sliding_window(q_list, max_seq_len, max_seq_len//2)
-            # a_patches = self.sliding_window(a_list, max_seq_len, max_seq_len//2)
-            # l_patches = self.sliding_window(l_list, max_seq_len, max_seq_len//2)
-            # d_patches = self.sliding_window(d_list, max_seq_len, max_seq_len//2)
-
             if len(q_patches) > 1:
                 train_q_patches, test_q_patches, train_a_patches, test_a_patches, train_l_patches, test_l_patches, train_d_patches, test_d_patches = train_test_split(q_patches, a_patches, l_patches, d_patches, test_size=self.validation_split, shuffle=False, stratify=None)
             else:
@@ -370,13 +365,6 @@ class KTBM_DataLoader_personalized_stateful:
 
         return (np.array(q_data), np.array(a_data), np.array(l_data), np.array(d_data), np.array(s_data), idx_data), \
                 (np.array(test_q_data), np.array(test_a_data), np.array(test_l_data), np.array(test_d_data), np.array(test_s_data), test_idx_data)
-    
-    def sliding_window(self, seq, window_size, stride):
-        data = []
-        for i in range(0, len(seq) - window_size + 1, stride):
-            data.append(seq[i: i + window_size])
-
-        return data
 
     def get_test_splits(self, num_splits):
         skf = KFold(n_splits=num_splits, shuffle=True, random_state=self.random_state)
