@@ -40,7 +40,7 @@ Please cite our paper if you use this code in your own work:
 
 ```
 
-## Collarators:
+## Collaborators:
 ```angular2html
 Soroush Hashemifar: shashemifar@albany.edu or hashemifar.soroush@gmail.com
 Sherry Sahebi: ssahebi@albany.edu
